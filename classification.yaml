@@ -1,7 +1,7 @@
 apiVersion: console.openshift.io/v1
 kind: ConsoleNotification
 metadata:
-  name: classification
+  name: classification-banner
 spec:
   location: BannerTopBottom
   text: UNCLASSIFIED
