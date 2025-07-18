@@ -1,0 +1,14 @@
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: etcd-backup-nfs
+spec:
+  capacity:
+    storage: 20Gi # Customize this
+  nfs:
+    server: <server ip address>
+    path: /<path to mount point on backup host>
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
