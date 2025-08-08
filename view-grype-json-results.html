@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grype JSON Report Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; /* slate-50 */
+        }
+        /* Custom styles for file drop area */
+        .drop-zone {
+            border: 2px dashed #cbd5e1; /* slate-300 */
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+        .drop-zone-over {
+            background-color: #e2e8f0; /* slate-200 */
+            border-color: #475569; /* slate-600 */
+        }
+        /* Styles for table header sorting */
+        th.sortable {
+            cursor: pointer;
+            position: relative;
+        }
+        th.sortable::after {
+            content: ' \2195'; /* Up-down arrow */
+            opacity: 0.4;
+            position: absolute;
+            right: 8px;
+        }
+        th.sort-asc::after {
+            content: ' \25B2'; /* Up arrow */
+            opacity: 1;
+        }
+        th.sort-desc::after {
+            content: ' \25BC'; /* Down arrow */
+            opacity: 1;
+        }
+        /* Severity colors */
+        .severity-critical { background-color: rgba(239, 68, 68, 0.2); }
+        .severity-high { background-color: rgba(249, 115, 22, 0.2); }
+        .severity-medium { background-color: rgba(234, 179, 8, 0.2); }
+        .severity-low { background-color: rgba(161, 161, 170, 0.2); }
+        .severity-negligible { background-color: rgba(241, 245, 249, 0.8); }
+        .severity-unknown { background-color: rgba(203, 213, 225, 0.8); }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-7xl">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-slate-900">Grype Report Viewer</h1>
+            <p class="text-slate-600 mt-2">Upload your Grype JSON file to view, sort, and filter the vulnerability report.</p>
+        </header>
+
+        <!-- File Upload / Drop Zone -->
+        <div id="uploadContainer" class="mb-8">
+            <div id="dropZone" class="drop-zone rounded-lg p-8 md:p-16 text-center bg-white shadow-sm">
+                <p class="text-slate-500 font-medium">Drag & Drop your Grype JSON file here</p>
+                <p class="text-sm text-slate-400 my-2">or</p>
+                <input type="file" id="fileInput" class="hidden" accept=".json">
+                <button onclick="document.getElementById('fileInput').click()" class="bg-blue-600 text-white font-bold py-2 px-4 rounded-md hover:bg-blue-700 transition">
+                    Select File
+                </button>
+            </div>
+        </div>
+
+        <!-- Report Display Area -->
+        <div id="reportContainer" class="hidden bg-white p-4 sm:p-6 rounded-lg shadow-md">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                <h2 id="reportTitle" class="text-2xl font-semibold text-slate-800">Scan Results</h2>
+                <input type="text" id="searchInput" class="w-full md:w-1/3 p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Filter by keyword...">
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-100 text-slate-600">
+                        <tr>
+                            <th class="p-3 text-left sortable" data-sort="artifact.name">Package</th>
+                            <th class="p-3 text-left sortable" data-sort="artifact.version">Installed Version</th>
+                            <th class="p-3 text-left sortable" data-sort="vulnerability.fix.versions">Fixed In</th>
+                            <th class="p-3 text-left sortable" data-sort="vulnerability.id">Vulnerability</th>
+                            <th class="p-3 text-left sortable" data-sort="vulnerability.severity">Severity</th>
+                            <th class="p-3 text-left sortable" data-sort="artifact.type">Type</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody">
+                        <!-- Rows will be inserted here by JavaScript -->
+                    </tbody>
+                </table>
+                 <p id="noResults" class="text-center p-8 text-slate-500 hidden">No results found.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const searchInput = document.getElementById('searchInput');
+        const resultsBody = document.getElementById('resultsBody');
+        const reportContainer = document.getElementById('reportContainer');
+        const uploadContainer = document.getElementById('uploadContainer');
+        const reportTitle = document.getElementById('reportTitle');
+        const noResults = document.getElementById('noResults');
+
+        // --- State Variables ---
+        let allMatches = [];
+        let currentSort = { key: 'vulnerability.severity', direction: 'desc' };
+
+        // --- File Handling ---
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drop-zone-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drop-zone-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drop-zone-over');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (data.matches && data.source) {
+                        allMatches = data.matches;
+                        displayReport(data.source);
+                        renderTable();
+                    } else {
+                        alert('Invalid Grype JSON file. Missing "matches" or "source" property.');
+                    }
+                } catch (error) {
+                    alert('Error parsing JSON file: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function displayReport(source) {
+            uploadContainer.classList.add('hidden');
+            reportContainer.classList.remove('hidden');
+            let targetName = 'Unknown Target';
+            if (source.target && source.target.userInput) {
+                targetName = source.target.userInput;
+            }
+            reportTitle.textContent = `Scan Results for: ${targetName}`;
+        }
+
+        // --- Table Rendering ---
+        function renderTable() {
+            let filteredMatches = filterData(allMatches);
+            let sortedMatches = sortData(filteredMatches);
+
+            resultsBody.innerHTML = ''; // Clear existing table
+            noResults.classList.toggle('hidden', sortedMatches.length > 0);
+
+            sortedMatches.forEach(match => {
+                const row = document.createElement('tr');
+                row.className = `border-b border-slate-200 hover:bg-slate-50 severity-${match.vulnerability.severity.toLowerCase()}`;
+
+                // Helper function to create a table cell
+                const createCell = (content) => {
+                    const cell = document.createElement('td');
+                    cell.className = 'p-3';
+                    cell.innerHTML = content;
+                    return cell;
+                };
+
+                const fixVersions = match.vulnerability.fix.versions.join(', ') || 'N/A';
+                const vulnerabilityLink = `<a href="${match.vulnerability.dataSource}" target="_blank" class="text-blue-600 hover:underline">${match.vulnerability.id}</a>`;
+
+                row.appendChild(createCell(match.artifact.name));
+                row.appendChild(createCell(match.artifact.version));
+                row.appendChild(createCell(fixVersions));
+                row.appendChild(createCell(vulnerabilityLink));
+                row.appendChild(createCell(match.vulnerability.severity));
+                row.appendChild(createCell(match.artifact.type));
+
+                resultsBody.appendChild(row);
+            });
+        }
+
+        // --- Filtering ---
+        searchInput.addEventListener('input', renderTable);
+
+        function filterData(data) {
+            const searchTerm = searchInput.value.toLowerCase();
+            if (!searchTerm) {
+                return data;
+            }
+            return data.filter(match => {
+                // Check against multiple fields
+                return (
+                    match.artifact.name.toLowerCase().includes(searchTerm) ||
+                    match.artifact.version.toLowerCase().includes(searchTerm) ||
+                    match.vulnerability.id.toLowerCase().includes(searchTerm) ||
+                    match.vulnerability.severity.toLowerCase().includes(searchTerm) ||
+                    match.artifact.type.toLowerCase().includes(searchTerm)
+                );
+            });
+        }
+
+        // --- Sorting ---
+        document.querySelectorAll('th.sortable').forEach(th => {
+            th.addEventListener('click', () => {
+                const sortKey = th.dataset.sort;
+                if (currentSort.key === sortKey) {
+                    currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    currentSort.key = sortKey;
+                    currentSort.direction = 'asc';
+                }
+                
+                // Update header styles
+                document.querySelectorAll('th.sortable').forEach(header => {
+                    header.classList.remove('sort-asc', 'sort-desc');
+                });
+                th.classList.add(currentSort.direction === 'asc' ? 'sort-asc' : 'sort-desc');
+
+                renderTable();
+            });
+        });
+        
+        // Set initial sort indicator
+        document.querySelector(`th[data-sort="${currentSort.key}"]`).classList.add('sort-desc');
+
+
+        // Helper to get nested property value for sorting
+        function getNestedValue(obj, path) {
+            return path.split('.').reduce((acc, part) => acc && acc[part], obj);
+        }
+
+        // Severity order for custom sorting
+        const severityOrder = {
+            'critical': 5,
+            'high': 4,
+            'medium': 3,
+            'low': 2,
+            'negligible': 1,
+            'unknown': 0
+        };
+
+        function sortData(data) {
+            return [...data].sort((a, b) => {
+                let valA, valB;
+
+                if (currentSort.key === 'vulnerability.severity') {
+                    valA = severityOrder[getNestedValue(a, currentSort.key)?.toLowerCase()] || 0;
+                    valB = severityOrder[getNestedValue(b, currentSort.key)?.toLowerCase()] || 0;
+                } else if (currentSort.key === 'vulnerability.fix.versions') {
+                    // Handle array sorting simply by its presence
+                    valA = getNestedValue(a, currentSort.key)?.length > 0 ? 1 : 0;
+                    valB = getNestedValue(b, currentSort.key)?.length > 0 ? 1 : 0;
+                } else {
+                    valA = getNestedValue(a, currentSort.key);
+                    valB = getNestedValue(b, currentSort.key);
+                }
+
+                // Type-aware comparison
+                if (typeof valA === 'string' && typeof valB === 'string') {
+                    valA = valA.toLowerCase();
+                    valB = valB.toLowerCase();
+                }
+
+                if (valA < valB) {
+                    return currentSort.direction === 'asc' ? -1 : 1;
+                }
+                if (valA > valB) {
+                    return currentSort.direction === 'asc' ? 1 : -1;
+                }
+                return 0;
+            });
+        }
+    </script>
+
+</body>
+</html>
